@@ -1,0 +1,110 @@
+---
+title: "p8105_hw6_js6177"
+author: "Jiayi Shi"
+date: "2022-11-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(patchwork)
+
+knitr::opts_chunk$set(
+  fig.width = 6,
+  fig.asp = .6,
+  out.width = "90%"
+)
+
+theme_set(theme_minimal() + theme(legend.position = "bottom"))
+
+options(
+  ggplot2.continuous.colour = "viridis",
+  ggplot2.continuous.fill = "viridis"
+)
+
+scale_colour_discrete = scale_colour_viridis_d
+scale_fill_discrete = scale_fill_viridis_d
+```
+
+## Problem 2
+
+The code below imports, cleans, and generally wrangles the data for analysis.
+
+```{r}
+homicide_data = read_csv("data/homicide-data.csv") %>% 
+  mutate(
+    city_state = str_c(city, state, sep = ", "),
+    resolved = as.numeric(disposition == "Closed by arrest")
+         ) %>% 
+  filter(!(city_state %in% c("Dallas, TX", "Phoenix, AZ", "Kansas City, MO","Tulsa, AL")), victim_race %in% c("White", "Black")) %>% 
+  mutate(
+    victim_age = as.numeric(victim_age),
+    victim_race = fct_relevel(victim_race, "White")
+    )
+```
+
+For the city of Baltimore, MD, use the glm function to fit a logistic regression with resolved vs unresolved as the outcome and victim age, sex and race as predictors. 
+
+```{r}
+fit_logistic = 
+  homicide_data %>%
+  filter(city == "Baltimore") %>% 
+  select(resolved, victim_age, victim_race, victim_sex) %>% 
+  glm(resolved ~ victim_age + victim_race + victim_sex, data = ., family = binomial()) 
+```
+
+Obtain the estimate and confidence interval of the adjusted odds ratio for solving homicides comparing male victims to female victims keeping all other variables fixed.
+
+```{r}
+# estimate
+fit_logistic %>% 
+  broom::tidy() %>% 
+  mutate(estimate = exp(estimate)) %>% 
+  pull(estimate) %>% .[4]
+
+# confidence interval
+lower_bound = exp(confint(fit_logistic, parm = "victim_sexMale"))[[1]]
+upper_bound = exp(confint(fit_logistic, parm = "victim_sexMale"))[[2]]
+ci = paste0("(", lower_bound, ",", upper_bound, ")")
+```
+
+```{r}
+odds_ratio = function(model){
+  tibble(
+    adjusted_or = model %>% 
+      broom::tidy() %>% 
+      mutate(estimate = exp(estimate)) %>% 
+      pull(estimate) %>% .[4],
+    lower_bound = exp(confint(model, parm = "victim_sexMale"))[[1]],
+    upper_bound = exp(confint(model, parm = "victim_sexMale"))[[2]],
+   )
+}
+```
+
+```{r}
+plot_df = homicide_data %>% 
+  select(city_state, resolved, victim_age, victim_race, victim_sex) %>% 
+  nest(df = resolved:victim_sex) %>% 
+  mutate(
+    models = map(df, ~glm(resolved ~ victim_age + victim_race + victim_sex, data = .x)),
+    results = map(models, odds_ratio)) %>% 
+  select(-df, -models) %>% 
+  unnest(results)
+```
+
+Plot
+```{r}
+plot_df %>% 
+  # Organize cities according to the estimated OR.
+  mutate(city_state = fct_reorder(city_state, adjusted_or)) %>% 
+  
+  ggplot(aes(x = city_state, y = adjusted_or))+
+  geom_point()+
+  geom_errorbar(aes(ymin = lower_bound, ymax = upper_bound))+
+  labs(title = "Estimated ORs and CIs for each city", 
+       y = "Estimated ORs", 
+       x = "City names", 
+       caption = "Error bars represent 95% confidence interval") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.2, hjust = 1))
+```
+

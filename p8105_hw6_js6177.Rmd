@@ -2,12 +2,15 @@
 title: "p8105_hw6_js6177"
 author: "Jiayi Shi"
 date: "2022-11-20"
-output: html_document
+output: github_document
 ---
 
 ```{r setup, include=FALSE}
 library(tidyverse)
 library(patchwork)
+library(mgcv)
+library(modelr)
+library(glmnet)
 
 knitr::opts_chunk$set(
   fig.width = 6,
@@ -24,19 +27,21 @@ options(
 
 scale_colour_discrete = scale_colour_viridis_d
 scale_fill_discrete = scale_fill_viridis_d
+
+set.seed(1)
 ```
 
 ## Problem 2
 
 The code below imports, cleans, and generally wrangles the data for analysis.
-
+Omit cities Dallas, TX; Phoenix, AZ; Kansas City, MO – these don’t report victim race. Also omit Tulsa, AL – this is a data entry mistake; `victim_age` unknown.
 ```{r}
 homicide_data = read_csv("data/homicide-data.csv") %>% 
   mutate(
     city_state = str_c(city, state, sep = ", "),
     resolved = as.numeric(disposition == "Closed by arrest")
          ) %>% 
-  filter(!(city_state %in% c("Dallas, TX", "Phoenix, AZ", "Kansas City, MO","Tulsa, AL")), victim_race %in% c("White", "Black")) %>% 
+  filter(!(city_state %in% c("Dallas, TX", "Phoenix, AZ", "Kansas City, MO","Tulsa, AL")), victim_race %in% c("White", "Black"), victim_age != "Unknown") %>% 
   mutate(
     victim_age = as.numeric(victim_age),
     victim_race = fct_relevel(victim_race, "White")
@@ -49,7 +54,7 @@ For the city of Baltimore, MD, use the glm function to fit a logistic regression
 fit_logistic = 
   homicide_data %>%
   filter(city == "Baltimore") %>% 
-  select(resolved, victim_age, victim_race, victim_sex) %>% 
+  dplyr::select(city_state, resolved, victim_age, victim_race, victim_sex) %>%
   glm(resolved ~ victim_age + victim_race + victim_sex, data = ., family = binomial()) 
 ```
 
@@ -62,7 +67,7 @@ fit_logistic %>%
   mutate(estimate = exp(estimate)) %>% 
   pull(estimate) %>% .[4]
 
-# confidence interval
+# confidence interval ci
 lower_bound = exp(confint(fit_logistic, parm = "victim_sexMale"))[[1]]
 upper_bound = exp(confint(fit_logistic, parm = "victim_sexMale"))[[2]]
 ci = paste0("(", lower_bound, ",", upper_bound, ")")
@@ -81,14 +86,14 @@ odds_ratio = function(model){
 }
 ```
 
-```{r}
+```{r message=FALSE}
 plot_df = homicide_data %>% 
-  select(city_state, resolved, victim_age, victim_race, victim_sex) %>% 
+  dplyr::select(city_state, resolved, victim_age, victim_race, victim_sex) %>% 
   nest(df = resolved:victim_sex) %>% 
   mutate(
     models = map(df, ~glm(resolved ~ victim_age + victim_race + victim_sex, data = .x)),
     results = map(models, odds_ratio)) %>% 
-  select(-df, -models) %>% 
+  dplyr::select(-df, -models) %>% 
   unnest(results)
 ```
 
@@ -107,4 +112,69 @@ plot_df %>%
        caption = "Error bars represent 95% confidence interval") +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.2, hjust = 1))
 ```
+
+## Problem 3
+
+Load the data, convert numeric variables `babysex`, `frace`, `malform`, `mrace` to factors and omit missing values.
+
+```{r}
+birthwt = read_csv("data/birthweight.csv")
+str(birthwt)
+```
+
+```{r}
+birthwt = birthwt %>% 
+  mutate(across(c(babysex, frace, malform, mrace), as.factor)) %>% 
+  select(bwt, everything()) 
+
+#First ensure that the missing values have been removed from the data
+birthwt = na.omit(birthwt)
+
+#sapply(birthwt, function(x) sum(is.na(x)))# no missing values
+```
+
+I build my model `both` using stepwise regression. 
+
+```{r}
+null = lm(bwt ~ 1, data = birthwt)
+full = lm(bwt ~ ., data = birthwt)
+both = step(null, direction='both', scope=formula(full), trace=0)
+both$coefficients
+```
+
+Plot of model residuals against fitted values:
+
+```{r}
+birthwt %>% 
+  add_predictions(both) %>% 
+  add_residuals(both) %>% 
+  ggplot(aes(x = pred, y = resid)) +
+  geom_point(alpha = .5)
+```
+
+I then compare my model to two others. I make a violin plot to get a sense of variance in prediction error to show prediction error distributions across methods. My model is a clear winner.
+
+```{r}
+cv_df = 
+  crossv_mc(birthwt, 100) %>% 
+  mutate(
+    my_mod  = map(train, ~both, data = .x),
+    mod_1  = map(train, ~lm(bwt ~ blength + gaweeks, data = .x)),
+    mod_2  = map(train, ~lm(bwt ~ bhead*blength*babysex, data = .x))) %>% 
+  mutate(
+    rmse_mymod = map2_dbl(my_mod, test, ~rmse(model = .x, data = .y)),
+    rmse_mod1 = map2_dbl(mod_1, test, ~rmse(model = .x, data = .y)),
+    rmse_mod2 = map2_dbl(mod_2, test, ~rmse(model = .x, data = .y)))
+
+cv_df %>% 
+  select(starts_with("rmse")) %>% 
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") %>% 
+  mutate(model = fct_inorder(model)) %>% 
+  ggplot(aes(x = model, y = rmse)) + geom_violin()
+```
+
 

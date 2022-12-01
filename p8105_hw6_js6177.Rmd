@@ -133,6 +133,13 @@ birthwt = na.omit(birthwt)
 #sapply(birthwt, function(x) sum(is.na(x)))# no missing values
 ```
 
+```{r}
+x = model.matrix(bwt ~., data = birthwt)[,-1]
+y = birthwt$bwt
+
+fit = glmnet(x, y, alpha = 0.5, lambda = 1.58)
+```
+
 I build my model `both` using stepwise regression. 
 
 ```{r}
@@ -158,7 +165,7 @@ I then compare my model to two others. I make a violin plot to get a sense of va
 cv_df = 
   crossv_mc(birthwt, 100) %>% 
   mutate(
-    my_mod  = map(train, ~both, data = .x),
+    my_mod  = map(train, ~both),
     mod_1  = map(train, ~lm(bwt ~ blength + gaweeks, data = .x)),
     mod_2  = map(train, ~lm(bwt ~ bhead*blength*babysex, data = .x))) %>% 
   mutate(
